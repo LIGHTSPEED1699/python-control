@@ -130,15 +130,39 @@ print(f"  Ki = {gains_ol_zn.ki:.4f}")
 print(f"  Kd = {gains_ol_zn.kd:.4f}")
 
 # --- Ziegler-Nichols frequency domain (from relay) ---
+# Classic PID
+
 gains_freq_zn = PIDGains(
     kp=0.6 * Ku,
     ki=1.2 * Ku / Tu,
     kd=0.075 * Ku * Tu
 )
-print(f"\n--- Relay ZN frequency ---")
+print(f"\n--- Relay ZN Classic ---")
 print(f"  Kp = {gains_freq_zn.kp:.4f}")
 print(f"  Ki = {gains_freq_zn.ki:.4f}")
 print(f"  Kd = {gains_freq_zn.kd:.4f}")
+
+# Some overshoot
+gains_some_os = PIDGains(
+    kp=0.333 * Ku,
+    ki=0.667 * Ku / Tu,
+    kd=0.111 * Ku * Tu
+)
+print(f"\n--- Some overshoot ---")
+print(f"  Kp = {gains_some_os.kp:.4f}")
+print(f"  Ki = {gains_some_os.ki:.4f}")
+print(f"  Kd = {gains_some_os.kd:.4f}")
+
+# No overshoot
+gains_no_os = PIDGains(
+    kp=0.2 * Ku,
+    ki=0.4 * Ku / Tu,
+    kd=0.067 * Ku * Tu
+)
+print(f"\n--- No overshoot ---")
+print(f"  Kp = {gains_no_os.kp:.4f}")
+print(f"  Ki = {gains_no_os.ki:.4f}")
+print(f"  Kd = {gains_no_os.kd:.4f}")
 
 # Also compute Cohen-Coon for comparison
 gains_cc = plant.coon_cohen_tuning('PID')
@@ -199,39 +223,55 @@ _, y_ol_zn, u_ol_zn = simulate_pid_closed_loop(
 _, y_freq_zn, u_freq_zn = simulate_pid_closed_loop(
     G, gains_freq_zn, t_cl, u_min=-50, u_max=50
 )
+_, y_some_os, u_some_os = simulate_pid_closed_loop(
+    G, gains_some_os, t_cl, u_min=-50, u_max=50
+)
+_, y_no_os, u_no_os = simulate_pid_closed_loop(
+    G, gains_no_os, t_cl, u_min=-50, u_max=50
+)
+_, y_cc, u_cc = simulate_pid_closed_loop(
+    G, gains_cc, t_cl, u_min=-50, u_max=50
+)
 
 # ---------------------------------------------------------------------------
-# 7. Compute actual overshoot & settling time
+# 7. Compute actual overshoot & settling time for ALL methods
 # ---------------------------------------------------------------------------
 def metrics(y, t, y_sp=1.0, tol=0.02):
-    """Return overshoot (%), peak time, settling time for step response."""
-    y_final = np.mean(y[-500:])  # last samples
-    if y_final < 0.1:
-        return 0.0, 0.0, 0.0
+    """Return overshoot (%), peak time, settling time, IAE for step response."""
+    y_final = float(np.mean(y[-500:]))
+    if y_final < 0.1 or np.isnan(y_final):
+        return 0.0, 0.0, 0.0, 0.0
 
     peak_idx = np.argmax(y)
     peak_val = y[peak_idx]
     peak_time = t[peak_idx]
 
     overshoot = max(0.0, (peak_val - y_final) / y_final * 100)
+    
+    # IAE (Integrated Absolute Error)
+    iae = float(np.trapezoid(np.abs(y - y_final), t))
 
-    # 2% settling time
-    within = np.where(np.abs(y - y_final) <= tol * np.abs(y_final))[0]
-    settling_time = t[within[-1]] if len(within) else t[-1]
-    # Find first time after which it stays within
+    # Settling time: first time after which signal stays within ±tol of final
+    settling_time = t[-1]
     for i in range(len(y) - 1, -1, -1):
         if np.abs(y[i] - y_final) > tol * np.abs(y_final):
             settling_time = t[min(i + 1, len(t) - 1)]
             break
 
-    return overshoot, peak_time, settling_time
+    return overshoot, peak_time, settling_time, iae
 
-os_ol, pt_ol, st_ol = metrics(y_ol_zn, t_cl)
-os_freq, pt_freq, st_freq = metrics(y_freq_zn, t_cl)
+results = {
+    'Open-loop ZN':        metrics(y_ol_zn, t_cl),
+    'Relay ZN Classic':    metrics(y_freq_zn, t_cl),
+    'Some overshoot':      metrics(y_some_os, t_cl),
+    'No overshoot':        metrics(y_no_os, t_cl),
+    'Cohen-Coon':          metrics(y_cc, t_cl),
+}
 
-print(f"\n--- Performance metrics ---")
-print(f"  Open-loop ZN   : OS={os_ol:.1f}%, peak@t={pt_ol:.1f}s, settle≈{st_ol:.1f}s")
-print(f"  Relay ZN freq  : OS={os_freq:.1f}%, peak@t={pt_freq:.1f}s, settle≈{st_freq:.1f}s")
+print(f"\n{'Method':<20} {'OS (%)':>8} {'Peak(s)':>9} {'Settle(s)':>10} {'IAE':>10}")
+print("-" * 60)
+for name, (os_val, pt, st, iae) in results.items():
+    print(f"{name:<20} {os_val:>8.1f} {pt:>9.1f} {st:>10.1f} {iae:>10.1f}")
 
 # ---------------------------------------------------------------------------
 # 8. PLOT 1 — Relay waveform (0–60 s, zoomed detail)
@@ -285,35 +325,44 @@ plt.savefig(
 print(f"\nSaved: relay-feedback-waveform.png")
 
 # ---------------------------------------------------------------------------
-# 9. PLOT 2 — Comparative closed-loop step responses
+# 9. PLOT 2 — Comprehensive closed-loop step response comparison
 # ---------------------------------------------------------------------------
-fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True,
+fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True,
                          gridspec_kw={'hspace': 0.08})
 
-# Output comparison
-t_plot_cl = t_cl[:int(80 / dt)]
-y_plot_ol = y_ol_zn[:len(t_plot_cl)]
-y_plot_freq = y_freq_zn[:len(t_plot_cl)]
+# Extract all y-values truncated to 80 s
+t_plot_cl = t_cl[:int(80 / float(t_cl[1] - t_cl[0]))]
+len_plot = len(t_plot_cl)
+
+# Unpack metrics
+os_ol, pt_ol, st_ol, iae_ol = results['Open-loop ZN']
+os_cl, pt_cl, st_cl, iae_cl = results['Relay ZN Classic']
+os_some, pt_some, st_some, iae_some = results['Some overshoot']
+os_no, pt_no, st_no, iae_no = results['No overshoot']
+os_cc, pt_cc, st_cc, iae_cc = results['Cohen-Coon']
+
+# Data dicts for plotting
+methods_data = [
+    ('Open-loop ZN',     y_ol_zn[:len_plot],     u_ol_zn[:len_plot],     os_ol,  'C0'),
+    ('Cohen-Coon',        y_cc[:len_plot],        u_cc[:len_plot],        os_cc,  'C2'),
+    ('Relay ZN Classic',  y_freq_zn[:len_plot],   u_freq_zn[:len_plot],   os_cl,  'C1'),
+    ('Some overshoot',    y_some_os[:len_plot],   u_some_os[:len_plot],   os_some, 'C3'),
+    ('No overshoot',      y_no_os[:len_plot],     u_no_os[:len_plot],     os_no,  'C4'),
+]
 
 axes[0].axhline(1.0, color='k', ls='--', lw=0.8, alpha=0.5)
-axes[0].plot(t_plot_cl, y_plot_ol, 'C0-', lw=1.4,
-             label=f'Open-loop ZN  (OS≈{os_ol:.0f}%)')
-axes[0].plot(t_plot_cl, y_plot_freq, 'C1-', lw=1.4,
-             label=f'Relay ZN freq  (OS≈{os_freq:.0f}%)')
-axes[0].fill_between(t_plot_cl, y_plot_ol, alpha=0.08, color='C0')
-axes[0].fill_between(t_plot_cl, y_plot_freq, alpha=0.08, color='C1')
+for name, y_plt, _, os_val, color in methods_data:
+    label = f'{name}  (OS≈{os_val:.0f}%)'
+    axes[0].plot(t_plot_cl, y_plt, color=color, lw=1.4, label=label, alpha=0.9)
+    axes[0].fill_between(t_plot_cl, y_plt, alpha=0.05, color=color)
 axes[0].set_ylabel('Output y(t)')
-axes[0].set_title('Closed-Loop Step Response Comparison')
-axes[0].legend(loc='upper right', ncol=2)
+axes[0].set_title('Closed-Loop Step Response : All ZN-Based Methods Compared')
+axes[0].legend(loc='upper right', ncol=2, fontsize=9)
 axes[0].grid(True, alpha=0.3)
-axes[0].set_ylim([0, max(2.0, np.max(y_plot_ol) * 1.1)])
+axes[0].set_ylim([0, 2.2])
 
-# Control signal comparison
-u_plot_ol = u_ol_zn[:len(t_plot_cl)]
-u_plot_freq = u_freq_zn[:len(t_plot_cl)]
-
-axes[1].plot(t_plot_cl, u_plot_ol, 'C0-', lw=1.0, alpha=0.8)
-axes[1].plot(t_plot_cl, u_plot_freq, 'C1-', lw=1.0, alpha=0.8)
+for name, _, u_plt, _, color in methods_data:
+    axes[1].plot(t_plot_cl, u_plt, color=color, lw=1.0, alpha=0.8)
 axes[1].set_ylabel('Control u(t)')
 axes[1].set_xlabel('Time (s)')
 axes[1].grid(True, alpha=0.3)
