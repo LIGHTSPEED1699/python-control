@@ -373,4 +373,43 @@ plt.savefig(
     dpi=150, bbox_inches='tight'
 )
 print(f"Saved: relay-feedback-closed-loop.png")
+
+# ---------------------------------------------------------------------------
+# 10. PLOT 3 — Three ZN variants only (Classic, some overshoot, no overshoot)
+# ---------------------------------------------------------------------------
+fig, axes = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True,
+                         gridspec_kw={'hspace': 0.08})
+
+t_plot_3 = t_cl[:int(60 / float(t_cl[1] - t_cl[0]))]
+len_3 = len(t_plot_3)
+
+zn3_data = [
+    ('ZN Classic',        y_freq_zn[:len_3],   u_freq_zn[:len_3],   os_cl,   'C0'),
+    ('Some overshoot',    y_some_os[:len_3],   u_some_os[:len_3],   os_some, 'C3'),
+    ('No overshoot',      y_no_os[:len_3],     u_no_os[:len_3],     os_no,   'C4'),
+]
+
+axes[0].axhline(1.0, color='k', ls='--', lw=0.8, alpha=0.5)
+for name, y_plt, _, os_val, color in zn3_data:
+    label = f'{name} (OS≈{os_val:.0f}%)'
+    axes[0].plot(t_plot_3, y_plt, color=color, lw=2.0, label=label, alpha=0.9)
+axes[0].set_ylabel('Output y(t)')
+axes[0].set_title('Relay-Derived Ziegler–Nichols Variants Compared')
+axes[0].legend(loc='upper right', fontsize=10)
+axes[0].grid(True, alpha=0.3)
+axes[0].set_ylim([0, 1.8])
+
+for name, _, u_plt, _, color in zn3_data:
+    axes[1].plot(t_plot_3, u_plt, color=color, lw=1.2, alpha=0.8)
+axes[1].set_ylabel('Control u(t)')
+axes[1].set_xlabel('Time (s)')
+axes[1].grid(True, alpha=0.3)
+axes[1].set_xlim([0, 60])
+
+plt.savefig(
+    os.path.join(WEBSITE_IMG_DIR, 'relay-feedback-zn3-comparison.png'),
+    dpi=150, bbox_inches='tight'
+)
+print(f"Saved: relay-feedback-zn3-comparison.png")
+
 print("\nDone.")
